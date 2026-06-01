@@ -9,3 +9,265 @@
       hello world
   </body>
 </html>
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>歡樂釣魚小遊戲</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: 'Microsoft JhengHei', sans-serif;
+        }
+        h1 {
+            color: #333;
+            margin: 10px 0;
+        }
+        #gameCanvas {
+            background: linear-gradient(to bottom, #87CEEB 0%, #87CEEB 20%, #1E90FF 30%, #00008B 100%);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .instructions {
+            margin-top: 10px;
+            font-size: 16px;
+            color: #444;
+            text-align: center;
+            line-height: 1.6;
+        }
+        .legend {
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🎣 歡樂釣魚趣 </h1>
+    <canvas id="gameCanvas" width="800" height="500"></canvas>
+    
+    <div class="instructions">
+        操作說明：點擊畫面任何地方放下魚鉤，抓到魚會獲得分數！<br>
+        <span class="legend" style="color: #FFD700;">★ 黃色小魚：50分 (速度快)</span> | 
+        <span class="legend" style="color: #FF69B4;">★ 粉紅中魚：20分 (速度中)</span> | 
+        <span class="legend" style="color: #1E90FF;">★ 藍色大魚：10分 (速度慢)</span>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let score = 0;
+        const boat = { x: canvas.width / 2 - 40, y: 70, width: 80, height: 30 };
+
+        const hook = {
+            x: canvas.width / 2,
+            y: 100,
+            targetY: 100,
+            speed: 6, // 稍微調快魚鉤速度讓節奏更好
+            state: "idle",
+            size: 10
+        };
+
+        // 魚的類別
+        class Fish {
+            constructor() {
+                this.x = Math.random() > 0.5 ? -50 : canvas.width + 50;
+                this.y = Math.random() * (canvas.height - 200) + 180;
+                this.isCaught = false;
+                
+                // 核心改動：隨機決定魚的種類 (30%黃色, 40%粉紅, 30%藍色)
+                const rand = Math.random();
+                if (rand < 0.3) {
+                    // 黃色小魚 (高分、速度快、體型小)
+                    this.type = "gold";
+                    this.color = "#FFD700";
+                    this.scoreValue = 50;
+                    this.width = 25;
+                    this.height = 15;
+                    this.baseSpeed = Math.random() * 2 + 3; // 速度 3~5
+                } else if (rand < 0.7) {
+                    // 粉紅中魚 (中分、速度中、體型中)
+                    this.type = "pink";
+                    this.color = "#FF69B4";
+                    this.scoreValue = 20;
+                    this.width = 40;
+                    this.height = 22;
+                    this.baseSpeed = Math.random() * 1.5 + 1.5; // 速度 1.5~3
+                } else {
+                    // 藍色大魚 (低分、速度慢、體型大)
+                    this.type = "blue";
+                    this.color = "#00BFFF";
+                    this.scoreValue = 10;
+                    this.width = 60;
+                    this.height = 35;
+                    this.baseSpeed = Math.random() * 1 + 0.8; // 速度 0.8~1.8
+                }
+
+                // 根據出生方向決定速度正負號
+                this.speed = this.baseSpeed * (this.x < 0 ? 1 : -1);
+            }
+
+            draw() {
+                ctx.save();
+                ctx.fillStyle = this.color;
+                
+                // 畫魚身
+                ctx.beginPath();
+                ctx.ellipse(this.x, this.y, this.width / 2, this.height / 2, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 畫魚尾 (依據魚的大小動態調整尾巴尺寸)
+                ctx.beginPath();
+                const tailSize = this.height / 2;
+                if (this.speed > 0) { // 向右游
+                    ctx.moveTo(this.x - this.width / 2, this.y);
+                    ctx.lineTo(this.x - this.width, this.y - tailSize);
+                    ctx.lineTo(this.x - this.width, this.y + tailSize);
+                } else { // 向左游
+                    ctx.moveTo(this.x + this.width / 2, this.y);
+                    ctx.lineTo(this.x + this.width, this.y - tailSize);
+                    ctx.lineTo(this.x + this.width, this.y + tailSize);
+                }
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.restore();
+            }
+
+            update() {
+                if (!this.isCaught) {
+                    this.x += this.speed;
+                } else {
+                    this.x = hook.x;
+                    this.y = hook.y + this.height / 2; // 讓魚看起來掛在鉤子下方
+                }
+            }
+        }
+
+        const fishes = [];
+        function spawnFish() {
+            if (fishes.length < 6) {
+                fishes.push(new Fish());
+            }
+        }
+
+        canvas.addEventListener("click", (e) => {
+            if (hook.state === "idle") {
+                const rect = canvas.getBoundingClientRect();
+                const clickY = e.clientY - rect.top;
+                
+                if (clickY > 150) {
+                    hook.targetY = clickY;
+                    hook.state = "dropping";
+                }
+            }
+        });
+
+        function checkCollision() {
+            for (let i = fishes.length - 1; i >= 0; i--) {
+                let fish = fishes[i];
+                let dist = Math.hypot(hook.x - fish.x, hook.y - fish.y);
+                
+                // 判定範圍依據魚的身高來動態調整，大魚比較容易點到，小魚比較難
+                if (dist < (fish.height + 10) && hook.state === "dropping" && !fish.isCaught) {
+                    fish.isCaught = true;
+                    hook.state = "retracting";
+                    break; // 一次只能釣一隻魚
+                }
+            }
+        }
+
+        function update() {
+            spawnFish();
+            fishes.forEach((fish, index) => {
+                fish.update();
+                if ((fish.speed > 0 && fish.x > canvas.width + 80) || (fish.speed < 0 && fish.x < -80)) {
+                    fishes.splice(index, 1);
+                }
+            });
+
+            if (hook.state === "dropping") {
+                hook.y += hook.speed;
+                checkCollision();
+                if (hook.y >= hook.targetY || hook.y >= canvas.height - 20) {
+                    hook.state = "retracting";
+                }
+            } else if (hook.state === "retracting") {
+                hook.y -= hook.speed;
+                if (hook.y <= 100) {
+                    hook.y = 100;
+                    hook.state = "idle";
+                    
+                    // 收線完成：根據抓到的魚種加上對應的分數
+                    for (let i = fishes.length - 1; i >= 0; i--) {
+                        if (fishes[i].isCaught) {
+                            score += fishes[i].scoreValue; // 核心改動：改為動態加分！
+                            fishes.splice(i, 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 水面
+            ctx.fillStyle = "#4682B4";
+            ctx.fillRect(0, 120, canvas.width, 5);
+
+            // 小船
+            ctx.fillStyle = "#8B4513";
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, 100, 40, 0, Math.PI, false);
+            ctx.fill();
+            
+            // 釣竿
+            ctx.strokeStyle = "#333";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 80);
+            ctx.lineTo(canvas.width / 2 + 15, 65);
+            ctx.stroke();
+
+            // 釣魚線
+            ctx.strokeStyle = "#eee";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 + 15, 65);
+            ctx.lineTo(hook.x, hook.y);
+            ctx.stroke();
+
+            // 魚鉤
+            ctx.strokeStyle = "#A9A9A9";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(hook.x, hook.y, hook.size, 0, Math.PI, false);
+            ctx.stroke();
+
+            // 魚群
+            fishes.forEach(fish => fish.draw());
+
+            // 顯示分數
+            ctx.fillStyle = "#FFF";
+            ctx.font = "bold 22px Arial";
+            ctx.fillText(`目前得分: ${score} 分`, 20, 40);
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
