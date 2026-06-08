@@ -9,12 +9,24 @@
       hello world
   </body>
 </html>
+沒問題！這是一個非常棒的想法。要讓魚鉤在「回鉤（收線）途中」依然具有碰撞偵測，並且能夠「一次釣起多隻魚」，我們需要對程式邏輯做兩個核心改動：
+
+放寬碰撞條件：原本限制只有在 extending（出竿）時才能抓魚，現在要把 retracting（收線）也納入偵測。
+
+改用陣列儲存被抓到的魚：原本一條線只能綁一隻魚，現在要把魚鉤上的魚改成一個陣列，並在收線時累加所有被抓到魚的重量，讓速度越來越慢！
+
+這裡幫你改寫了核心邏輯。請看以下修改後的完整程式碼：
+
+升級版完整程式碼（支援連釣、回程撈魚）
+HTML
+
+
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>歡樂釣魚小遊戲 </title>
+    <title>歡樂釣魚小遊戲 - 連釣特仕版</title>
     <style>
         body {
             margin: 0;
@@ -47,11 +59,12 @@
 </head>
 <body>
 
-    <h1>歡樂釣魚趣</h1>
+    <h1>歡樂釣魚趣 (狂熱連釣版)</h1>
     <canvas id="gameCanvas" width="800" height="500"></canvas>
     
     <div class="instructions">
-        操作說明：魚鉤會自動左右擺動。**點擊畫面任何地方**，魚鉤就會朝該方向射出！<br>
+        操作說明：魚鉤會自動左右擺動。**點擊畫面任何地方**射出魚鉤！<br>
+        <span style="color: #FF4500; font-weight: bold;">🔥 特色功能：去程、回程都可以釣魚！一次可以串起好幾隻魚喔！</span><br>
         <span class="legend" style="color: #FFD700;">★ 黃色小魚：50分</span> | 
         <span class="legend" style="color: #FF69B4;">★ 粉紅中魚：20分</span> | 
         <span class="legend" style="color: #1E90FF;">★ 藍色大魚：10分</span>
@@ -62,8 +75,18 @@
         const ctx = canvas.getContext("2d");
 
         let score = 0;
+        let gameTime = 60; 
+        let gameOver = false;
 
-        // 釣竿發射起點 (小船中心下方)
+        const timerInterval = setInterval(() => {
+            if (gameTime > 0) {
+                gameTime--;
+            } else {
+                gameOver = true;
+                clearInterval(timerInterval);
+            }
+        }, 1000);
+
         const pivotX = canvas.width / 2;
         const pivotY = 100;
 
@@ -73,13 +96,15 @@
             y: pivotY,
             startX: pivotX,
             startY: pivotY,
-            length: 20,       // 魚鉤線長
-            angle: 0,         // 當前角度 (弧度)
-            swingSpeed: 0.03, // 擺動速度
-            swingRange: Math.PI / 3, // 擺動範圍 (左右各60度)
-            extendSpeed: 7,   // 出竿速度
-            state: "swinging", // swinging (擺動), extending (伸長), retracting (縮回)
-            size: 10
+            length: 20,       
+            angle: 0,         
+            swingSpeed: 0.03, 
+            swingRange: Math.PI / 3, 
+            baseExtendSpeed: 7,   
+            currentSpeed: 7,      
+            state: "swinging", // swinging, extending, retracting
+            size: 10,
+            caughtFishes: [] // 【新增】用來存放目前魚鉤上所有的魚
         };
 
         // 魚的類別
@@ -88,17 +113,21 @@
                 this.x = Math.random() > 0.5 ? -50 : canvas.width + 50;
                 this.y = Math.random() * (canvas.height - 220) + 180;
                 this.isCaught = false;
+                this.caughtIndex = 0; // 【新增】記錄自己是魚鉤上的第幾隻魚，用來算排隊位置
                 
                 const rand = Math.random();
                 if (rand < 0.3) {
                     this.type = "gold"; this.color = "#FFD700"; this.scoreValue = 50;
                     this.width = 25; this.height = 15; this.baseSpeed = Math.random() * 2 + 3;
+                    this.weight = 0.2; 
                 } else if (rand < 0.7) {
                     this.type = "pink"; this.color = "#FF69B4"; this.scoreValue = 20;
                     this.width = 40; this.height = 22; this.baseSpeed = Math.random() * 1.5 + 1.5;
+                    this.weight = 1.5; 
                 } else {
                     this.type = "blue"; this.color = "#00BFFF"; this.scoreValue = 10;
                     this.width = 60; this.height = 35; this.baseSpeed = Math.random() * 1 + 0.8;
+                    this.weight = 3.5; 
                 }
                 this.speed = this.baseSpeed * (this.x < 0 ? 1 : -1);
             }
@@ -112,7 +141,7 @@
 
                 ctx.beginPath();
                 const tailSize = this.height / 2;
-                if (this.speed > 0) {
+                if (this.speed > 0 && !this.isCaught) {
                     ctx.moveTo(this.x - this.width / 2, this.y);
                     ctx.lineTo(this.x - this.width, this.y - tailSize);
                     ctx.lineTo(this.x - this.width, this.y + tailSize);
@@ -130,91 +159,112 @@
                 if (!this.isCaught) {
                     this.x += this.speed;
                 } else {
-                    // 被抓到的魚，位置緊跟著魚鉤尖端
+                    // 【優化】多隻魚串在一起時，依序往下排隊，看起來像一串粽子
+                    let offset = 0;
+                    for (let i = 0; i < this.caughtIndex; i++) {
+                        offset += hook.caughtFishes[i].height - 5; 
+                    }
                     this.x = hook.x;
-                    this.y = hook.y + this.height / 3;
+                    this.y = hook.y + (this.height / 2) + offset;
                 }
             }
         }
 
         const fishes = [];
         function spawnFish() {
-            if (fishes.length < 6) fishes.push(new Fish());
+            if (fishes.length < 6 && !gameOver) fishes.push(new Fish());
         }
 
-        // 點擊事件：當在擺動時點擊，就朝目前角度發射
         canvas.addEventListener("click", () => {
+            if (gameOver) {
+                document.location.reload();
+                return;
+            }
             if (hook.state === "swinging") {
                 hook.state = "extending";
+                hook.currentSpeed = hook.baseExtendSpeed;
             }
         });
 
         // 碰撞檢測
         function checkCollision() {
+            // 【修改】去程 (extending) 和 回程 (retracting) 都可以觸發碰撞
+            if (hook.state === "swinging") return;
+
             for (let i = fishes.length - 1; i >= 0; i--) {
                 let fish = fishes[i];
+                
+                // 計算魚與魚鉤尖端的距離
                 let dist = Math.hypot(hook.x - fish.x, hook.y - fish.y);
                 
-                if (dist < (fish.height + 10) && hook.state === "extending" && !fish.isCaught) {
+                if (dist < (fish.height + 12) && !fish.isCaught) {
                     fish.isCaught = true;
-                    hook.state = "retracting";
-                    break;
+                    
+                    // 紀錄這隻魚是這串裡面的第幾隻
+                    fish.caughtIndex = hook.caughtFishes.length;
+                    hook.caughtFishes.push(fish);
+
+                    // 如果是在去程抓到，立刻切換成回程
+                    if (hook.state === "extending") {
+                        hook.state = "retracting";
+                    }
+
+                    // 【動態計算總重量】把魚鉤上所有的魚重量加總，扣減收線速度
+                    let totalWeight = hook.caughtFishes.reduce((sum, f) => sum + f.weight, 0);
+                    hook.currentSpeed = Math.max(0.8, hook.baseExtendSpeed - totalWeight);
                 }
             }
         }
 
-        // 核心邏輯更新
         let swingTimer = 0;
         function update() {
+            if (gameOver) return;
+
             spawnFish();
             fishes.forEach((fish, index) => {
                 fish.update();
-                if ((fish.speed > 0 && fish.x > canvas.width + 80) || (fish.speed < 0 && fish.x < -80)) {
+                if (!fish.isCaught && ((fish.speed > 0 && fish.x > canvas.width + 80) || (fish.speed < 0 && fish.x < -80))) {
                     fishes.splice(index, 1);
                 }
             });
 
-            // 魚鉤方向與長度控制
             if (hook.state === "swinging") {
-                // 使用正弦函數 (Math.sin) 讓魚鉤規律地左右卡擺動
                 swingTimer += hook.swingSpeed;
                 hook.angle = Math.sin(swingTimer) * hook.swingRange;
-                
-                // 根據角度計算魚鉤畫在螢幕上的 XY 座標
                 hook.x = hook.startX + Math.sin(hook.angle) * hook.length;
                 hook.y = hook.startY + Math.cos(hook.angle) * hook.length;
 
             } else if (hook.state === "extending") {
-                // 伸長線段
-                hook.length += hook.extendSpeed;
+                hook.length += hook.currentSpeed;
                 hook.x = hook.startX + Math.sin(hook.angle) * hook.length;
                 hook.y = hook.startY + Math.cos(hook.angle) * hook.length;
 
                 checkCollision();
 
-                // 觸底或超出邊界則收線
                 if (hook.y >= canvas.height - 20 || hook.x <= 10 || hook.x >= canvas.width - 10) {
                     hook.state = "retracting";
                 }
 
             } else if (hook.state === "retracting") {
-                // 縮短線段
-                hook.length -= hook.extendSpeed;
+                hook.length -= hook.currentSpeed;
                 hook.x = hook.startX + Math.sin(hook.angle) * hook.length;
                 hook.y = hook.startY + Math.cos(hook.angle) * hook.length;
 
-                // 縮回到原本長度時，回復到擺動模式
+                // 【回程持續偵測】回縮途中遇到魚也能抓！
+                checkCollision();
+
                 if (hook.length <= 20) {
                     hook.length = 20;
                     hook.state = "swinging";
                     
-                    // 分數結算
-                    for (let i = fishes.length - 1; i >= 0; i--) {
-                        if (fishes[i].isCaught) {
-                            score += fishes[i].scoreValue;
-                            fishes.splice(i, 1);
-                        }
-                    }
+                    // 【大結算】回到小船，一次加總所有串起來的魚分數，並清空魚鉤
+                    hook.caughtFishes.forEach(f => {
+                        score += f.scoreValue;
+                        let idx = fishes.indexOf(f);
+                        if (idx > -1) fishes.splice(idx, 1);
+                    });
+                    hook.caughtFishes = []; // 清空魚鉤陣列
+                    hook.currentSpeed = hook.baseExtendSpeed; // 恢復初始速度
                 }
             }
         }
@@ -232,7 +282,7 @@
             ctx.arc(canvas.width / 2, 100, 40, 0, Math.PI, false);
             ctx.fill();
 
-            // 繪製釣魚線 (從起始點連到魚鉤)
+            // 繪製釣魚線
             ctx.strokeStyle = "#eee";
             ctx.lineWidth = 2;
             ctx.beginPath();
@@ -240,10 +290,10 @@
             ctx.lineTo(hook.x, hook.y);
             ctx.stroke();
 
-            // 繪製魚鉤 (順著釣線的角度旋轉，看起來更自然)
+            // 繪製魚鉤
             ctx.save();
             ctx.translate(hook.x, hook.y);
-            ctx.rotate(-hook.angle); // 配合旋轉
+            ctx.rotate(hook.angle); 
             ctx.strokeStyle = "#A9A9A9";
             ctx.lineWidth = 3;
             ctx.beginPath();
@@ -251,13 +301,39 @@
             ctx.stroke();
             ctx.restore();
 
-            // 魚群
+            // 繪製魚群
             fishes.forEach(fish => fish.draw());
 
-            // 顯示分數
+            // 顯示資訊看板
             ctx.fillStyle = "#FFF";
             ctx.font = "bold 22px Arial";
             ctx.fillText(`目前得分: ${score} 分`, 20, 40);
+            ctx.fillText(`剩餘時間: ${gameTime} 秒`, canvas.width - 180, 40);
+
+            // 顯示當前魚鉤狀態（連擊數提示）
+            if (hook.caughtFishes.length > 1) {
+                ctx.fillStyle = "#FFD700";
+                ctx.font = "italic bold 20px Arial";
+                ctx.fillText(`🔥 Combo x${hook.caughtFishes.length}!`, hook.x + 20, hook.y - 10);
+            }
+
+            if (gameOver) {
+                ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = "#FFF";
+                ctx.font = "bold 40px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText("遊戲結束", canvas.width / 2, canvas.height / 2 - 20);
+                
+                ctx.font = "bold 25px Arial";
+                ctx.fillText(`最終得分: ${score} 分`, canvas.width / 2, canvas.height / 2 + 30);
+                
+                ctx.font = "18px Arial";
+                ctx.fillStyle = "#FFD700";
+                ctx.fillText("點擊任意地方重新開始遊戲", canvas.width / 2, canvas.height / 2 + 80);
+                ctx.textAlign = "left";
+            }
         }
 
         function gameLoop() {
@@ -270,4 +346,3 @@
     </script>
 </body>
 </html>
-
