@@ -95,7 +95,7 @@ HTML
             currentSpeed: 7,      
             state: "swinging", // swinging, extending, retracting
             size: 10,
-            caughtFishes: [] // 【新增】用來存放目前魚鉤上所有的魚
+            caughtFishes: [] // 用來存放目前魚鉤上所有的魚
         };
 
         // 魚的類別
@@ -104,7 +104,7 @@ HTML
                 this.x = Math.random() > 0.5 ? -50 : canvas.width + 50;
                 this.y = Math.random() * (canvas.height - 220) + 180;
                 this.isCaught = false;
-                this.caughtIndex = 0; // 【新增】記錄自己是魚鉤上的第幾隻魚，用來算排隊位置
+                this.caughtIndex = 0; // 記錄自己是魚鉤上的第幾隻魚
                 
                 const rand = Math.random();
                 if (rand < 0.3) {
@@ -125,6 +125,13 @@ HTML
 
             draw() {
                 ctx.save();
+                // 【優化】讓魚跟著魚鉤的角度旋轉，看起來更自然
+                if (this.isCaught) {
+                    ctx.translate(this.x, this.y);
+                    ctx.rotate(hook.angle + Math.PI / 2); // 旋轉垂直向下掛著
+                    ctx.translate(-this.x, -this.y);
+                }
+
                 ctx.fillStyle = this.color;
                 ctx.beginPath();
                 ctx.ellipse(this.x, this.y, this.width / 2, this.height / 2, 0, 0, Math.PI * 2);
@@ -132,7 +139,12 @@ HTML
 
                 ctx.beginPath();
                 const tailSize = this.height / 2;
-                if (this.speed > 0 && !this.isCaught) {
+                // 如果被抓到了，固定讓尾巴朝上（或配合擺動）
+                if (this.isCaught) {
+                    ctx.moveTo(this.x, this.y - this.height / 2);
+                    ctx.lineTo(this.x - tailSize, this.y - this.height);
+                    ctx.lineTo(this.x + tailSize, this.y - this.height);
+                } else if (this.speed > 0) {
                     ctx.moveTo(this.x - this.width / 2, this.y);
                     ctx.lineTo(this.x - this.width, this.y - tailSize);
                     ctx.lineTo(this.x - this.width, this.y + tailSize);
@@ -150,18 +162,18 @@ HTML
                 if (!this.isCaught) {
                     this.x += this.speed;
                 } else {
-                    // 【優化】多隻魚串在一起時，依序往下排隊，看起來像一串粽子
-                    let offset = 0;
+                    // 【優化】配合魚鉤旋轉角度計算串聯位置，才不會永遠垂直向下
+                    let offset = 15; // 基礎與鉤子的距離
                     for (let i = 0; i < this.caughtIndex; i++) {
-                        offset += hook.caughtFishes[i].height - 5; 
+                        offset += hook.caughtFishes[i].height; 
                     }
-                    this.x = hook.x;
-                    this.y = hook.y + (this.height / 2) + offset;
+                    this.x = hook.x + Math.sin(hook.angle) * offset;
+                    this.y = hook.y + Math.cos(hook.angle) * offset;
                 }
             }
         }
 
-        const fishes = [];
+        let fishes = [];
         function spawnFish() {
             if (fishes.length < 6 && !gameOver) fishes.push(new Fish());
         }
@@ -179,28 +191,24 @@ HTML
 
         // 碰撞檢測
         function checkCollision() {
-            // 【修改】去程 (extending) 和 回程 (retracting) 都可以觸發碰撞
             if (hook.state === "swinging") return;
 
             for (let i = fishes.length - 1; i >= 0; i--) {
                 let fish = fishes[i];
+                if (fish.isCaught) continue; // 跳過已經被抓到的魚
                 
                 // 計算魚與魚鉤尖端的距離
                 let dist = Math.hypot(hook.x - fish.x, hook.y - fish.y);
                 
-                if (dist < (fish.height + 12) && !fish.isCaught) {
+                if (dist < (fish.height / 2 + 15)) {
                     fish.isCaught = true;
-                    
-                    // 紀錄這隻魚是這串裡面的第幾隻
                     fish.caughtIndex = hook.caughtFishes.length;
                     hook.caughtFishes.push(fish);
 
-                    // 如果是在去程抓到，立刻切換成回程
                     if (hook.state === "extending") {
                         hook.state = "retracting";
                     }
 
-                    // 【動態計算總重量】把魚鉤上所有的魚重量加總，扣減收線速度
                     let totalWeight = hook.caughtFishes.reduce((sum, f) => sum + f.weight, 0);
                     hook.currentSpeed = Math.max(0.8, hook.baseExtendSpeed - totalWeight);
                 }
@@ -212,12 +220,17 @@ HTML
             if (gameOver) return;
 
             spawnFish();
-            fishes.forEach((fish, index) => {
+            
+            // 【修正】改用傳統 for 迴圈倒序更新與刪除，避免 Array 發生崩潰與魚群直接消失的 Bug
+            for (let i = fishes.length - 1; i >= 0; i--) {
+                let fish = fishes[i];
                 fish.update();
+                
+                // 只有沒被抓到的魚超出邊界才需要被移除
                 if (!fish.isCaught && ((fish.speed > 0 && fish.x > canvas.width + 80) || (fish.speed < 0 && fish.x < -80))) {
-                    fishes.splice(index, 1);
+                    fishes.splice(i, 1);
                 }
-            });
+            }
 
             if (hook.state === "swinging") {
                 swingTimer += hook.swingSpeed;
@@ -241,21 +254,21 @@ HTML
                 hook.x = hook.startX + Math.sin(hook.angle) * hook.length;
                 hook.y = hook.startY + Math.cos(hook.angle) * hook.length;
 
-                // 【回程持續偵測】回縮途中遇到魚也能抓！
                 checkCollision();
 
                 if (hook.length <= 20) {
                     hook.length = 20;
                     hook.state = "swinging";
                     
-                    // 【大結算】回到小船，一次加總所有串起來的魚分數，並清空魚鉤
+                    // 大結算：增加分數
                     hook.caughtFishes.forEach(f => {
                         score += f.scoreValue;
+                        // 【修正】在此時才將已被結算的魚從全域 fishes 陣列中移除
                         let idx = fishes.indexOf(f);
                         if (idx > -1) fishes.splice(idx, 1);
                     });
-                    hook.caughtFishes = []; // 清空魚鉤陣列
-                    hook.currentSpeed = hook.baseExtendSpeed; // 恢復初始速度
+                    hook.caughtFishes = []; 
+                    hook.currentSpeed = hook.baseExtendSpeed; 
                 }
             }
         }
@@ -301,7 +314,7 @@ HTML
             ctx.fillText(`目前得分: ${score} 分`, 20, 40);
             ctx.fillText(`剩餘時間: ${gameTime} 秒`, canvas.width - 180, 40);
 
-            // 顯示當前魚鉤狀態（連擊數提示）
+            // 顯示當前魚鉤狀態
             if (hook.caughtFishes.length > 1) {
                 ctx.fillStyle = "#FFD700";
                 ctx.font = "italic bold 20px Arial";
